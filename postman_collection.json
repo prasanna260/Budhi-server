@@ -1,0 +1,1099 @@
+{
+    "info": {
+      "name": "BudhiTrade API Complete Workflow",
+      "description": "Complete testing workflow for BudhiTrade API including authentication, profile, wallet, and KYC operations",
+      "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+      {
+        "key": "baseUrl",
+        "value": "http://localhost:8000",
+        "type": "string"
+      },
+      {
+        "key": "access_token",
+        "value": "",
+        "type": "string"
+      },
+      {
+        "key": "admin_token",
+        "value": "",
+        "type": "string"
+      },
+      {
+        "key": "test_user_id",
+        "value": "",
+        "type": "string"
+      },
+      {
+        "key": "test_username",
+        "value": "testuser123",
+        "type": "string"
+      },
+      {
+        "key": "test_email",
+        "value": "testuser123@example.com",
+        "type": "string"
+      },
+      {
+        "key": "admin_username",
+        "value": "adminuser",
+        "type": "string"
+      },
+      {
+        "key": "admin_email",
+        "value": "admin@buddhitrade.com",
+        "type": "string"
+      }
+    ],
+    "item": [
+      {
+        "name": "🏠 Health Check",
+        "event": [
+          {
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test(\"Status code is 200\", function () {",
+                "    pm.response.to.have.status(200);",
+                "});",
+                "",
+                "pm.test(\"Response has message\", function () {",
+                "    var jsonData = pm.response.json();",
+                "    pm.expect(jsonData.message).to.eql(\"BudhiTrade API is running!\");",
+                "});"
+              ]
+            }
+          }
+        ],
+        "request": {
+          "method": "GET",
+          "header": [],
+          "url": {
+            "raw": "{{baseUrl}}/",
+            "host": [
+              "{{baseUrl}}"
+            ],
+            "path": [
+              ""
+            ]
+          }
+        },
+        "response": []
+      },
+      {
+        "name": "👤 User Registration & Authentication",
+        "item": [
+          {
+            "name": "1. Register Regular User",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"User registration successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.eql(\"Signup successful\");",
+                    "    pm.expect(jsonData.user_id).to.be.a('number');",
+                    "    pm.collectionVariables.set(\"test_user_id\", jsonData.user_id);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"{{test_username}}\",\n  \"email\": \"{{test_email}}\",\n  \"password\": \"testpassword123\",\n  \"mobile\": \"9876543210\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/signup",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "signup"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Register Admin User (if needed)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Admin registration successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.eql(\"Signup successful\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"{{admin_username}}\",\n  \"email\": \"{{admin_email}}\",\n  \"password\": \"adminpassword123\",\n  \"mobile\": \"9123456789\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/signup",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "signup"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. Login as Regular User",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Login successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.access_token).to.be.a('string');",
+                    "    pm.expect(jsonData.token_type).to.eql(\"bearer\");",
+                    "    pm.expect(jsonData.role).to.eql(\"user\");",
+                    "    pm.collectionVariables.set(\"access_token\", jsonData.access_token);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"{{test_username}}\",\n  \"password\": \"testpassword123\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/login",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "login"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "4. Login as Admin User",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Admin login successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.access_token).to.be.a('string');",
+                    "    pm.expect(jsonData.token_type).to.eql(\"bearer\");",
+                    "    pm.collectionVariables.set(\"admin_token\", jsonData.access_token);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"{{admin_username}}\",\n  \"password\": \"adminpassword123\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/login",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "login"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "👤 Profile Management",
+        "item": [
+          {
+            "name": "1. Get Profile (Initial)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Get profile successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.username).to.eql(pm.collectionVariables.get(\"test_username\"));",
+                    "    pm.expect(jsonData.email).to.eql(pm.collectionVariables.get(\"test_email\"));",
+                    "    pm.expect(jsonData.full_name).to.eql(\"\");",
+                    "    pm.expect(jsonData.bio).to.eql(\"\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/profile",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "profile"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Update Profile",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Profile update successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.eql(\"Profile updated successfully\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "PUT",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"full_name\": \"John Doe\",\n  \"bio\": \"Stock market enthusiast and trader\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/profile",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "profile"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. Get Profile (Updated)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Get updated profile successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.full_name).to.eql(\"John Doe\");",
+                    "    pm.expect(jsonData.bio).to.eql(\"Stock market enthusiast and trader\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/profile",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "profile"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "💰 Wallet Management",
+        "item": [
+          {
+            "name": "1. Get Wallet Balance (Initial)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Get wallet successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.balance).to.eql(0);",
+                    "    pm.expect(jsonData.updated_at).to.be.a('string');",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/wallet",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Add Funds to Wallet",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Add funds successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.eql(\"Funds added\");",
+                    "    pm.expect(jsonData.new_balance).to.eql(5000);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"amount\": 5000,\n  \"method\": \"upi\",\n  \"reference_id\": \"ref_123456789\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/wallet/add",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet",
+                  "add"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. Get Wallet Balance (After Add)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Wallet balance updated\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.balance).to.eql(5000);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/wallet",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "4. Withdraw Funds",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Withdrawal request successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.include(\"Withdrawal request created\");",
+                    "    pm.expect(jsonData.new_balance).to.eql(3000);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"amount\": 2000,\n  \"destination\": \"UPI: john.doe@okhdfcbank\",\n  \"reference_id\": \"withdraw_987654321\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/wallet/withdraw",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet",
+                  "withdraw"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "5. Get Wallet Transactions",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Get transactions successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData).to.be.an('array');",
+                    "    pm.expect(jsonData.length).to.be.at.least(2);",
+                    "    \n    // Check if we have both credit and debit transactions",
+                    "    const transactionTypes = jsonData.map(tx => tx.type);",
+                    "    pm.expect(transactionTypes).to.include('credit');",
+                    "    pm.expect(transactionTypes).to.include('debit');",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/wallet/transactions",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet",
+                  "transactions"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "📋 KYC Management",
+        "item": [
+          {
+            "name": "1. Get KYC Status (Initial)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Get KYC status successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.status).to.eql(\"pending\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/kyc/status",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "kyc",
+                  "status"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Submit KYC Details",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"KYC submission successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.eql(\"KYC submitted. Awaiting review.\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"pan_number\": \"ABCDE1234F\",\n  \"aadhaar_number\": \"123456789012\",\n  \"address_line\": \"123 Main Street, Andheri East\",\n  \"city\": \"Mumbai\",\n  \"state\": \"Maharashtra\",\n  \"pincode\": \"400069\",\n  \"document_front_url\": \"https://example.com/docs/front.jpg\",\n  \"document_back_url\": \"https://example.com/docs/back.jpg\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/kyc/submit",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "kyc",
+                  "submit"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. Get KYC Status (After Submission)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"KYC status shows submitted data\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.status).to.eql(\"pending\");",
+                    "    pm.expect(jsonData.pan_number).to.eql(\"ABCDE1234F\");",
+                    "    pm.expect(jsonData.city).to.eql(\"Mumbai\");",
+                    "    pm.expect(jsonData.state).to.eql(\"Maharashtra\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/kyc/status",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "kyc",
+                  "status"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "👨‍💼 Admin Operations",
+        "item": [
+          {
+            "name": "1. Admin - List Pending KYC",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Admin get pending KYC successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData).to.be.an('array');",
+                    "    \n    // Find our test user in the pending list",
+                    "    const testUserKYC = jsonData.find(kyc => kyc.username === pm.collectionVariables.get(\"test_username\"));",
+                    "    pm.expect(testUserKYC).to.be.an('object');",
+                    "    pm.expect(testUserKYC.pan_number).to.eql(\"ABCDE1234F\");",
+                    "    pm.collectionVariables.set(\"pending_kyc_user_id\", testUserKYC.user_id);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{admin_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/admin/kyc/pending",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "admin",
+                  "kyc",
+                  "pending"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Admin - Approve KYC",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Admin approve KYC successful\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.message).to.include(\"approved\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{admin_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"approve\": true,\n  \"reason\": \"Documents verified successfully\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/admin/kyc/{{test_user_id}}/decide",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "admin",
+                  "kyc",
+                  "{{test_user_id}}",
+                  "decide"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. User - Check KYC Status (Approved)",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"KYC status shows approved\", function () {",
+                    "    pm.response.to.have.status(200);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.status).to.eql(\"approved\");",
+                    "    pm.expect(jsonData.reviewed_at).to.be.a('string');",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/kyc/status",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "kyc",
+                  "status"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "🔄 Error Handling & Edge Cases",
+        "item": [
+          {
+            "name": "1. Invalid Token Access",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Invalid token rejected\", function () {",
+                    "    pm.response.to.have.status(401);",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer invalid_token_here"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/profile",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "profile"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "2. Insufficient Funds Withdrawal",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Insufficient funds error\", function () {",
+                    "    pm.response.to.have.status(400);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.detail).to.include(\"Insufficient\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"amount\": 100000,\n  \"destination\": \"UPI: test@bank\",\n  \"reference_id\": \"withdraw_large\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/wallet/withdraw",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "wallet",
+                  "withdraw"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "3. Duplicate User Registration",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Duplicate registration rejected\", function () {",
+                    "    pm.response.to.have.status(400);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.detail).to.include(\"already exists\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"{{test_username}}\",\n  \"email\": \"{{test_email}}\",\n  \"password\": \"testpassword123\",\n  \"mobile\": \"9876543210\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/signup",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "signup"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "4. Access Admin Routes as Regular User",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Regular user cannot access admin routes\", function () {",
+                    "    pm.response.to.have.status(403);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.detail).to.include(\"Admin only\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "GET",
+              "header": [
+                {
+                  "key": "Authorization",
+                  "value": "Bearer {{access_token}}"
+                }
+              ],
+              "url": {
+                "raw": "{{baseUrl}}/admin/kyc/pending",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "admin",
+                  "kyc",
+                  "pending"
+                ]
+              }
+            },
+            "response": []
+          },
+          {
+            "name": "5. Invalid Login Credentials",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "pm.test(\"Invalid login rejected\", function () {",
+                    "    pm.response.to.have.status(401);",
+                    "    var jsonData = pm.response.json();",
+                    "    pm.expect(jsonData.detail).to.include(\"Invalid\");",
+                    "});"
+                  ]
+                }
+              }
+            ],
+            "request": {
+              "method": "POST",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"username\": \"nonexistentuser\",\n  \"password\": \"wrongpassword\"\n}"
+              },
+              "url": {
+                "raw": "{{baseUrl}}/login",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  "login"
+                ]
+              }
+            },
+            "response": []
+          }
+        ]
+      },
+      {
+        "name": "🧹 Cleanup (Optional)",
+        "item": [
+          {
+            "name": "Delete Test Users (Manual DB Query)",
+            "request": {
+              "method": "GET",
+              "header": [],
+              "url": {
+                "raw": "{{baseUrl}}/",
+                "host": [
+                  "{{baseUrl}}"
+                ],
+                "path": [
+                  ""
+                ]
+              },
+              "description": "Note: You may want to manually delete test users from your database after testing:\n\n-- SQL to delete test users\nDELETE FROM wallet_transactions WHERE wallet_id IN (SELECT id FROM wallets WHERE user_id IN (SELECT id FROM users WHERE username IN ('testuser123', 'adminuser')));\nDELETE FROM wallets WHERE user_id IN (SELECT id FROM users WHERE username IN ('testuser123', 'adminuser'));\nDELETE FROM profiles WHERE user_id IN (SELECT id FROM users WHERE username IN ('testuser123', 'adminuser'));\nDELETE FROM kyc WHERE user_id IN (SELECT id FROM users WHERE username IN ('testuser123', 'adminuser'));\nDELETE FROM users WHERE username IN ('testuser123', 'adminuser');"
+            },
+            "response": []
+          }
+        ]
+      }
+    ],
+    "event": [
+      {
+        "listen": "prerequest",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "console.log('Running BudhiTrade API Tests - Base URL: ' + pm.collectionVariables.get(\"baseUrl\"));"
+          ]
+        }
+      },
+      {
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "console.log('Test completed: ' + pm.response.code);"
+          ]
+        }
+      }
+    ]
+  }
