@@ -1,5 +1,5 @@
-# Use Python 3.13 slim base image (x86_64 for Railway)
-FROM --platform=linux/amd64 python:3.13-slim-bookworm
+# Use Python 3.11.13 slim base image (x86_64 for Railway)
+FROM --platform=linux/amd64 python:3.11.13-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
 
