@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import ForeignKey
@@ -11,6 +12,12 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import jwt
 import hashlib
+import json
+import os
+from google.oauth2 import id_token
+from google.auth.transport import requests
+from google_auth_oauthlib.flow import Flow
+
 
 # =========================================#
 # CONFIGURATION
@@ -19,6 +26,15 @@ DATABASE_URL = "postgresql://postgres:ZpfLDFFOLJemAIEkOTBpEjCuBWYyIwSm@switchbac
 SECRET_KEY = "YOUR_SECRET_KEY_CHANGE_THIS"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_SECRET_FILE = os.path.join(os.path.dirname(__file__), "client_secret_569540551378-mulbtgst82mumc131p7odv200dhv9ipo.apps.googleusercontent.com.json")
+with open(GOOGLE_CLIENT_SECRET_FILE, "r") as f:
+    GOOGLE_CLIENT_CONFIG = json.load(f)["web"]
+
+GOOGLE_CLIENT_ID = GOOGLE_CLIENT_CONFIG["client_id"] or ""
+GOOGLE_CLIENT_SECRET = GOOGLE_CLIENT_CONFIG["client_secret"]
+GOOGLE_REDIRECT_URI = "http://localhost:5713/auth/google/callback"  # Frontend callback URL
 
 app = FastAPI(title="BudhiTrade Backend")
 
@@ -48,6 +64,8 @@ class User(Base):
     email = Column(String(100), unique=True, nullable=False, index=True)
     mobile = Column(String(20), unique=False, nullable=True)
     hashed_password = Column(String(255), nullable=False)
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
+
     role = Column(String(20), default="user", nullable=False)  # 'user' | 'admin'
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -164,10 +182,35 @@ def get_db():
 # =========================================
 # AUTH DEPENDENCY
 # =========================================
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
-    token = credentials.credentials
-    username = decode_access_token(token)
-    user = db.query(User).filter(User.username == username).first()
+from typing import Optional
+from fastapi import Query
+
+# Make security optional to support query parameter tokens
+security_optional = HTTPBearer(auto_error=False)
+
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+) -> User:
+    # Try to get token from Authorization header first, then query parameter
+    token_str = None
+    if credentials:
+        token_str = credentials.credentials
+    elif token:
+        token_str = token
+    
+    if not token_str:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated. Provide token in Authorization header or query parameter."
+        )
+    
+    identifier = decode_access_token(token_str)
+    # Try to find user by username or email (for Google OAuth users)
+    user = db.query(User).filter(
+        (User.username == identifier) | (User.email == identifier)
+    ).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return user
@@ -194,6 +237,9 @@ class LoginRequest(BaseModel):
 class ProfileUpdate(BaseModel):
     full_name: str | None = None
     bio: str | None = None
+
+class GoogleTokenRequest(BaseModel):
+    token: str
 
 
 class AddFundsRequest(BaseModel):
@@ -237,6 +283,7 @@ def _record_wallet_tx(db: Session, wallet: Wallet, amount: float, tx_type: str, 
     )
     wallet.updated_at = datetime.utcnow()
     db.add(tx)
+
 
 # =========================================
 # ROUTES
@@ -282,7 +329,14 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
 @app.post("/login")
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == request.username).first()
-    if not user or not verify_password(request.password, user.hashed_password):
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    # Check if user has a password (not a Google OAuth user)
+    if not user.hashed_password:
+        raise HTTPException(status_code=401, detail="This account uses Google Sign-In. Please login with Google.")
+    
+    if not verify_password(request.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user.profile:
         profile = Profile(user_id=user.id, full_name="", bio="")
@@ -305,13 +359,32 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 # ---------- PROFILE ----------
-@app.get("/profile")
-def get_profile(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prof = user.profile
+class ProfileResponse(BaseModel):
+    username: str
+    email: str
+    mobile: str | None
+    full_name: str
+    bio: str
+
+    class Config:
+        from_attributes = True
+
+@app.get("/profile", response_model=ProfileResponse)
+def get_profile(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Get the user with profile loaded
+    from sqlalchemy.orm import joinedload
+    db_user = db.query(User).options(joinedload(User.profile)).filter(User.id == user.id).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    prof = db_user.profile
     return {
-        "username": user.username,
-        "email": user.email,
-        "mobile": user.mobile,
+        "username": db_user.username,
+        "email": db_user.email,
+        "mobile": db_user.mobile,
         "full_name": (prof.full_name if prof and prof.full_name else ""),
         "bio": (prof.bio if prof and prof.bio else "")
     }
@@ -332,6 +405,114 @@ def update_profile(update_data: ProfileUpdate, user: User = Depends(get_current_
     db.commit()
     db.refresh(prof)
     return {"message": "Profile updated successfully"}
+
+# =========================================
+# GOOGLE OAUTH ROUTES
+# =========================================
+@app.get("/auth/google")
+def google_auth():
+    """Initiate Google OAuth flow"""
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [GOOGLE_REDIRECT_URI]
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+    )
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
+    
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent'
+    )
+    
+    return {"auth_url": authorization_url, "state": state}
+
+@app.post("/auth/google/token")
+def google_token_exchange(request: GoogleTokenRequest, db: Session = Depends(get_db)):
+    """Exchange Google ID token for JWT"""
+    try:
+        # Verify the Google ID token
+        idinfo = id_token.verify_oauth2_token(
+            request.token, 
+            requests.Request(), 
+            GOOGLE_CLIENT_ID
+        )
+        
+        # Extract user information
+        google_id = idinfo.get("sub")
+        email = idinfo.get("email")
+        name = idinfo.get("name", "")
+        picture = idinfo.get("picture", "")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email not provided by Google")
+        
+        # Check if user exists by Google ID or email
+        user = db.query(User).filter(
+            (User.google_id == google_id) | (User.email == email)
+        ).first()
+        
+        if not user:
+            # Create new user
+            # Generate username from email if not provided
+            username_base = email.split("@")[0]
+            username = username_base
+            counter = 1
+            while db.query(User).filter(User.username == username).first():
+                username = f"{username_base}{counter}"
+                counter += 1
+            
+            user = User(
+                username=username,
+                email=email,
+                google_id=google_id,
+                hashed_password=None
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            # Create profile with name from Google
+            profile = Profile(user_id=user.id, full_name=name, bio="")
+            db.add(profile)
+            
+            # Create wallet with default 0.0 balance
+            wallet = Wallet(user_id=user.id, balance=0.0)
+            db.add(wallet)
+            
+            # Create initial KYC row
+            kyc = KYC(user_id=user.id, status="pending")
+            db.add(kyc)
+            
+            db.commit()
+        else:
+            # Update existing user if needed
+            if not user.google_id:
+                user.google_id = google_id
+                db.commit()
+            
+            # Update profile name if not set
+            if user.profile and not user.profile.full_name and name:
+                user.profile.full_name = name
+                db.commit()
+            
+            db.refresh(user)
+        
+        # Generate JWT token
+        access_token = create_access_token(data={"sub": user.username or user.email})
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid Google token: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 
 # ---------- WALLET ----------
