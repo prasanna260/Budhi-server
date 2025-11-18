@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -127,6 +128,19 @@ class KYC(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="kyc")
+
+
+class ZerodhaConnection(Base):
+    __tablename__ = "zerodha_connections"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    api_key = Column(String(255), nullable=False)
+    api_secret = Column(String(255), nullable=False)
+    access_token = Column(String(255), nullable=True)
+    session_status = Column(String(50), default="disconnected")  # connected | pending_token | disconnected
+    request_token = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 Base.metadata.create_all(bind=engine)
@@ -671,6 +685,10 @@ def admin_decide_kyc(user_id: int, decision: KYCDecisionRequest, admin: User = D
 from neo_api_client import NeoAPI
 import traceback
 
+# ZERODHA KITE CONNECT
+# =========================================
+from kiteconnect import KiteConnect
+
 class KotakInitRequest(BaseModel):
     consumer_key: str
     consumer_secret: str
@@ -683,6 +701,17 @@ class KotakLoginRequest(BaseModel):
 
 class Kotak2FARequest(BaseModel):
     otp: str
+
+
+# ZERODHA REQUEST SCHEMAS
+# =========================================
+class ZerodhaInitRequest(BaseModel):
+    api_key: str
+    api_secret: str
+
+
+class ZerodhaTokenExchangeRequest(BaseModel):
+    request_token: str
 
 
 # --- MODELS ---
@@ -743,6 +772,45 @@ def clear_kotak_client(user_id: int):
     """Remove client from cache"""
     if user_id in _kotak_clients:
         del _kotak_clients[user_id]
+
+
+# --- ZERODHA CLIENT MANAGEMENT ---
+# In-memory cache for Zerodha KiteConnect instances
+_zerodha_clients = {}
+
+def get_zerodha_connection(db: Session, user_id: int) -> ZerodhaConnection:
+    zc = db.query(ZerodhaConnection).filter(ZerodhaConnection.user_id == user_id).first()
+    if not zc:
+        zc = ZerodhaConnection(user_id=user_id, api_key="", api_secret="", session_status="disconnected")
+        db.add(zc)
+        db.commit()
+        db.refresh(zc)
+    return zc
+
+
+def get_or_create_zerodha_client(zc: ZerodhaConnection) -> KiteConnect:
+    """Get existing client from cache or create new one"""
+    user_id = zc.user_id
+    
+    # If client exists in cache and keys match, reuse it
+    if user_id in _zerodha_clients:
+        return _zerodha_clients[user_id]
+    
+    # Create new client and cache it
+    client = KiteConnect(api_key=zc.api_key)
+    
+    # Set access token if available
+    if zc.access_token:
+        client.set_access_token(zc.access_token)
+    
+    _zerodha_clients[user_id] = client
+    return client
+
+
+def clear_zerodha_client(user_id: int):
+    """Remove client from cache"""
+    if user_id in _zerodha_clients:
+        del _zerodha_clients[user_id]
 
 
 # ---------- INIT CONNECTION ----------
@@ -849,3 +917,209 @@ def kotak_disconnect(user: User = Depends(get_current_user), db: Session = Depen
     
     db.commit()
     return {"message": "Disconnected from Kotak Neo."}
+
+
+# =========================================
+# ZERODHA KITE CONNECT BROKER ENDPOINTS
+# =========================================
+
+# ---------- INIT CONNECTION ----------
+@app.post("/broker/zerodha/init")
+def zerodha_init(req: ZerodhaInitRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    zc = get_zerodha_connection(db, user.id)
+    zc.api_key = req.api_key.strip()
+    zc.api_secret = req.api_secret.strip()
+    zc.session_status = "disconnected"
+    zc.access_token = None
+    zc.request_token = None
+    zc.updated_at = datetime.utcnow()
+    
+    # Clear any cached client when keys change
+    clear_zerodha_client(user.id)
+    
+    db.commit()
+    return {"message": "Zerodha API keys stored successfully. You can now generate login URL."}
+
+
+# ---------- GENERATE LOGIN URL ----------
+@app.get("/broker/zerodha/login_url")
+def zerodha_login_url(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    zc = get_zerodha_connection(db, user.id)
+    if not zc.api_key:
+        raise HTTPException(status_code=400, detail="API key not found. Run /broker/zerodha/init first.")
+    
+    try:
+        client = get_or_create_zerodha_client(zc)
+        login_url = client.login_url()
+        return {"login_url": login_url}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Failed to generate login URL: {str(e)}")
+
+
+@app.get("/")
+def root_callback(request: Request, db: Session = Depends(get_db)):
+    """
+    Handle Zerodha OAuth callback at root URL
+    This endpoint serves as the redirect target for Zerodha OAuth
+    Note: This endpoint doesn't require authentication as it's called by Zerodha redirect
+    """
+    request_token = request.query_params.get("request_token")
+    status = request.query_params.get("status")
+    
+    if not request_token or status != "success":
+        return HTMLResponse("""
+        <html>
+        <body>
+            <h1>Authentication Failed</h1>
+            <p>Unable to connect your Zerodha account. Please try again.</p>
+            <script>
+                if (window.opener) {
+                    window.opener.postMessage({
+                        type: 'ZERODHA_AUTH_ERROR',
+                        error: 'Authentication failed'
+                    }, '*');
+                }
+                setTimeout(() => window.close(), 2000);
+            </script>
+        </body>
+        </html>
+        """)
+    
+    # Return a simple HTML page that communicates with the parent window
+    return HTMLResponse(f"""
+    <html>
+    <body>
+        <h1>Authentication Successful!</h1>
+        <p>Your Zerodha account has been connected successfully.</p>
+        <script>
+            if (window.opener && !window.opener.closed) {{
+                window.opener.postMessage({{
+                    type: 'ZERODHA_AUTH_SUCCESS',
+                    requestToken: '{request_token}'
+                }}, '*');
+            }}
+            setTimeout(() => window.close(), 2000);
+        </script>
+    </body>
+    </html>
+    """)
+
+
+@app.get("/zerodha/callback")
+def zerodha_callback(request: Request, db: Session = Depends(get_db)):
+    """
+    Handle Zerodha OAuth callback
+    This endpoint serves as the redirect target for Zerodha OAuth
+    Note: This endpoint doesn't require authentication as it's called by Zerodha redirect
+    """
+    request_token = request.query_params.get("request_token")
+    status = request.query_params.get("status")
+    
+    if not request_token or status != "success":
+        return HTMLResponse("""
+        <html>
+        <body>
+            <h1>Authentication Failed</h1>
+            <p>Unable to connect your Zerodha account. Please try again.</p>
+            <script>
+                if (window.opener) {
+                    window.opener.postMessage({
+                        type: 'ZERODHA_AUTH_ERROR',
+                        error: 'Authentication failed'
+                    }, '*');
+                }
+                setTimeout(() => window.close(), 2000);
+            </script>
+        </body>
+        </html>
+        """)
+    
+    # Return a simple HTML page that communicates with the parent window
+    return HTMLResponse(f"""
+    <html>
+    <body>
+        <h1>Authentication Successful!</h1>
+        <p>Your Zerodha account has been connected successfully.</p>
+        <script>
+            if (window.opener && !window.opener.closed) {{
+                window.opener.postMessage({{
+                    type: 'ZERODHA_AUTH_SUCCESS',
+                    requestToken: '{request_token}'
+                }}, '*');
+            }}
+            setTimeout(() => window.close(), 2000);
+        </script>
+    </body>
+    </html>
+    """)
+
+
+# ---------- EXCHANGE REQUEST TOKEN ----------
+@app.post("/broker/zerodha/exchange_token")
+def zerodha_exchange_token(req: ZerodhaTokenExchangeRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    zc = get_zerodha_connection(db, user.id)
+    if not zc.api_key or not zc.api_secret:
+        raise HTTPException(status_code=400, detail="API keys not found. Run /broker/zerodha/init first.")
+    
+    try:
+        # Clear old client and create fresh one for token exchange
+        clear_zerodha_client(user.id)
+        client = get_or_create_zerodha_client(zc)
+        
+        # Generate session data
+        session_data = client.generate_session(req.request_token, zc.api_secret)
+        zc.access_token = session_data["access_token"]
+        zc.request_token = req.request_token
+        zc.session_status = "connected"
+        zc.updated_at = datetime.utcnow()
+        
+        # Update client with new access token
+        client.set_access_token(zc.access_token)
+        
+        db.commit()
+        return {"message": "Zerodha connected successfully.", "access_token": zc.access_token, "status": zc.session_status}
+    except Exception as e:
+        traceback.print_exc()
+        clear_zerodha_client(user.id)
+        zc.session_status = "disconnected"
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
+
+
+# ---------- PORTFOLIO ----------
+@app.get("/broker/zerodha/portfolio")
+def zerodha_portfolio(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    zc = get_zerodha_connection(db, user.id)
+    if zc.session_status != "connected":
+        raise HTTPException(status_code=401, detail="Zerodha not connected. Complete token exchange first.")
+    
+    try:
+        client = get_or_create_zerodha_client(zc)
+        holdings = client.holdings()
+        positions = client.positions()
+        orders = client.orders()
+        return {
+            "holdings": holdings,
+            "positions": positions,
+            "orders": orders
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Failed to fetch portfolio: {str(e)}")
+
+
+# ---------- DISCONNECT ----------
+@app.post("/broker/zerodha/disconnect")
+def zerodha_disconnect(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    zc = get_zerodha_connection(db, user.id)
+    zc.session_status = "disconnected"
+    zc.access_token = None
+    zc.request_token = None
+    zc.updated_at = datetime.utcnow()
+    
+    # Clear cached client
+    clear_zerodha_client(user.id)
+    
+    db.commit()
+    return {"message": "Disconnected from Zerodha Kite."}
