@@ -41,10 +41,10 @@ app = FastAPI(title="BudhiTrade Backend")
 # Allow your React frontend to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Add your frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Or specify methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers=["*"],  # Or specify headers: ["Authorization", "Content-Type"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # =========================================
@@ -645,7 +645,6 @@ def admin_list_pending_kyc(admin: User = Depends(get_current_user), db: Session 
         for r in rows
     ]
 
-
 @app.post("/admin/kyc/{user_id}/decide")
 def admin_decide_kyc(user_id: int, decision: KYCDecisionRequest, admin: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_admin(admin)
@@ -855,12 +854,15 @@ def kotak_disconnect(user: User = Depends(get_current_user), db: Session = Depen
 # =========================================
 from kiteconnect import KiteConnect
 from pydantic import BaseModel
+from urllib.parse import urlparse, parse_qs
 
 class ZerodhaInitRequest(BaseModel):
     api_key: str
-    api_secret: str     # stored encrypted or hashed ideally (plain for now)
-    redirect_uri: str   # frontend or backend callback endpoint
+    api_secret: str
+    redirect_uri: str
 
+class ZerodhaCallbackRequest(BaseModel):
+    callback_url: str  # Full URL that user copies from browser after login
 
 # --- MODEL ---
 class ZerodhaConnection(Base):
@@ -902,17 +904,13 @@ def get_zerodha_connection(db: Session, user_id: int) -> ZerodhaConnection:
         db.refresh(conn)
     return conn
 
-
-# ---------- INIT KEYS ----------
+# ---------- INIT KEYS (unchanged) ----------
 @app.post("/broker/zerodha/init")
 def zerodha_init(req: ZerodhaInitRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     zc = get_zerodha_connection(db, user.id)
     zc.api_key = req.api_key.strip()
     zc.api_secret = req.api_secret.strip()
-
-    # This DOES NOT matter for Zerodha login, only for your internal reference
     zc.redirect_uri = req.redirect_uri.strip()
-
     zc.status = "disconnected"
     zc.access_token = None
     zc.updated_at = datetime.utcnow()
@@ -920,7 +918,7 @@ def zerodha_init(req: ZerodhaInitRequest, user: User = Depends(get_current_user)
     db.commit()
     return {"message": "Zerodha API keys stored. Generate login URL next."}
 
-# ---------- GENERATE LOGIN URL ----------
+# ---------- GENERATE LOGIN URL (unchanged) ----------
 @app.get("/broker/zerodha/login-url")
 def zerodha_login_url(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     zc = get_zerodha_connection(db, user.id)
@@ -928,7 +926,6 @@ def zerodha_login_url(user: User = Depends(get_current_user), db: Session = Depe
     if not zc.api_key or not zc.api_secret:
         raise HTTPException(status_code=400, detail="Zerodha keys missing. Run /broker/zerodha/init first.")
 
-    # Correct usage – no redirect_uri here
     kite = KiteConnect(api_key=zc.api_key)
     login_url = kite.login_url()
 
@@ -937,26 +934,49 @@ def zerodha_login_url(user: User = Depends(get_current_user), db: Session = Depe
 
     return {
         "login_url": login_url,
-        "message": "Open this URL and complete Zerodha login."
+        "message": "Open this URL, complete Zerodha login, and paste the final callback URL you get after login."
     }
 
-# ---------- CALLBACK (FRONTEND OR BACKEND WILL HIT THIS) ----------
-@app.get("/broker/zerodha/callback")
-def zerodha_callback(
-    request_token: str,
-    status_param: str | None = None,
+# ---------- EXTRACT REQUEST TOKEN FROM CALLBACK URL ----------
+def extract_request_token_from_url(callback_url: str) -> str:
+    """
+    Extract request_token from Zerodha callback URL
+    Expected format: https://your-redirect-uri/?request_token=XXXXXX&action=login&status=success
+    """
+    try:
+        parsed_url = urlparse(callback_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        request_token = query_params.get('request_token')
+        if not request_token:
+            raise ValueError("No request_token found in the callback URL")
+        
+        return request_token[0]  # parse_qs returns list of values
+    
+    except Exception as e:
+        raise ValueError(f"Failed to parse callback URL: {str(e)}")
+
+# ---------- MANUAL CALLBACK WITH PASTED URL ----------
+@app.post("/broker/zerodha/callback")
+def zerodha_callback_manual(
+    req: ZerodhaCallbackRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     zc = get_zerodha_connection(db, user.id)
 
     if zc.status != "pending_login":
-        raise HTTPException(status_code=400, detail="Login not initiated.")
+        raise HTTPException(status_code=400, detail="Login not initiated. Generate login URL first.")
 
     try:
+        # Extract request token from the pasted URL
+        request_token = extract_request_token_from_url(req.callback_url)
+        
+        # Generate session with the extracted request token
         kite = KiteConnect(api_key=zc.api_key)
         session_data = kite.generate_session(request_token, api_secret=zc.api_secret)
 
+        # Store connection details
         zc.request_token = request_token
         zc.access_token = session_data["access_token"]
         zc.status = "connected"
@@ -965,15 +985,17 @@ def zerodha_callback(
         db.commit()
 
         return {
-            "message": "Zerodha connected",
-            "access_token": zc.access_token,
-            "status": zc.status
+            "message": "Zerodha connected successfully!",
+            "status": zc.status,
+            "user_id": session_data.get("user_id")
         }
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid callback URL: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Callback failed: {str(e)}")
 
-# ---------- PORTFOLIO ----------
+# ---------- PORTFOLIO (unchanged) ----------
 @app.get("/broker/zerodha/portfolio")
 def zerodha_portfolio(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     zc = get_zerodha_connection(db, user.id)
@@ -994,7 +1016,7 @@ def zerodha_portfolio(user: User = Depends(get_current_user), db: Session = Depe
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to retrieve portfolio: {str(e)}")
 
-# ---------- DISCONNECT ----------
+# ---------- DISCONNECT (unchanged) ----------
 @app.post("/broker/zerodha/disconnect")
 def zerodha_disconnect(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     zc = get_zerodha_connection(db, user.id)
@@ -1006,5 +1028,3 @@ def zerodha_disconnect(user: User = Depends(get_current_user), db: Session = Dep
 
     db.commit()
     return {"message": "Disconnected from Zerodha."}
-
-
