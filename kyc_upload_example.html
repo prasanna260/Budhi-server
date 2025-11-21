@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>KYC Upload Example</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, button { width: 100%; padding: 10px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; margin-top: 10px; }
+        button:hover { background: #0056b3; }
+        .result { margin-top: 20px; padding: 15px; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>KYC Bank Statement Verification</h1>
+    
+    <form id="kycForm">
+        <div class="form-group">
+            <label>Full Name (as per bank account):</label>
+            <input type="text" id="full_name" required>
+        </div>
+        
+        <div class="form-group">
+            <label>Account Number:</label>
+            <input type="text" id="account_number" required>
+        </div>
+        
+        <div class="form-group">
+            <label>IFSC Code:</label>
+            <input type="text" id="ifsc_code" required>
+        </div>
+        
+        <div class="form-group">
+            <label>Bank Statement PDF:</label>
+            <input type="file" id="bank_statement" accept=".pdf" required>
+        </div>
+        
+        <div class="form-group">
+            <label>PDF Password (if protected):</label>
+            <input type="password" id="pdf_password" placeholder="Leave empty if not password protected">
+        </div>
+        
+        <button type="submit">Submit KYC</button>
+    </form>
+    
+    <div id="result"></div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        const JWT_TOKEN = localStorage.getItem('jwt_token'); // Get from login
+
+        document.getElementById('kycForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('full_name', document.getElementById('full_name').value);
+            formData.append('account_number', document.getElementById('account_number').value);
+            formData.append('ifsc_code', document.getElementById('ifsc_code').value);
+            formData.append('bank_statement', document.getElementById('bank_statement').files[0]);
+            
+            const pdfPassword = document.getElementById('pdf_password').value;
+            if (pdfPassword) {
+                formData.append('pdf_password', pdfPassword);
+            }
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Verifying... Please wait.</p>';
+            
+            try {
+                const response = await fetch(`${API_URL}/kyc/submit`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${JWT_TOKEN}`
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <h3>✓ ${data.message}</h3>
+                        <p><strong>Status:</strong> ${data.status}</p>
+                        <p><strong>Verification Results:</strong></p>
+                        <ul>
+                            <li>Name: ${data.verification_results.name ? '✓ Found' : '✗ Not Found'}</li>
+                            <li>Account: ${data.verification_results.account ? '✓ Found' : '✗ Not Found'}</li>
+                            <li>IFSC: ${data.verification_results.ifsc ? '✓ Found' : '✗ Not Found'}</li>
+                        </ul>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>✗ Error</h3><p>${data.detail}</p>`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>✗ Error</h3><p>${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>

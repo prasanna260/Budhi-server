@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -14,6 +14,9 @@ import jwt
 import hashlib
 import json
 import os
+import re
+import fitz  # PyMuPDF
+import requests as http_requests
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from google_auth_oauthlib.flow import Flow
@@ -112,17 +115,15 @@ class KYC(Base):
     __tablename__ = "kyc"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
-    pan_number = Column(String(20), nullable=True)
-    aadhaar_number = Column(String(20), nullable=True)
-    address_line = Column(String(255), nullable=True)
-    city = Column(String(100), nullable=True)
-    state = Column(String(100), nullable=True)
-    pincode = Column(String(20), nullable=True)
-    document_front_url = Column(String(255), nullable=True)
-    document_back_url = Column(String(255), nullable=True)
+    
+    # Bank statement verification fields
+    full_name = Column(String(100), nullable=True)
+    account_number = Column(String(50), nullable=True)
+    ifsc_code = Column(String(20), nullable=True)
+    bank_statement_filename = Column(String(255), nullable=True)  # Original filename
+    
     status = Column(String(20), default="pending")  # "pending" | "approved" | "rejected"
-    reviewed_by_admin_id = Column(Integer, nullable=True)
-    reviewed_at = Column(DateTime, nullable=True)
+    verification_details = Column(String(500), nullable=True)  # JSON string with verification results
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -254,20 +255,7 @@ class WithdrawRequest(BaseModel):
     reference_id: str | None = None
 
 
-class KYCSubmitRequest(BaseModel):
-    pan_number: str | None = None
-    aadhaar_number: str | None = None
-    address_line: str | None = None
-    city: str | None = None
-    state: str | None = None
-    pincode: str | None = None
-    document_front_url: str | None = None
-    document_back_url: str | None = None
-
-
-class KYCDecisionRequest(BaseModel):
-    approve: bool
-    reason: str | None = None
+# KYC will use Form data instead of JSON for file upload
 
 
 # =========================================
@@ -283,6 +271,63 @@ def _record_wallet_tx(db: Session, wallet: Wallet, amount: float, tx_type: str, 
     )
     wallet.updated_at = datetime.utcnow()
     db.add(tx)
+
+
+# =========================================
+# KYC VERIFICATION HELPERS
+# =========================================
+def extract_text_from_pdf(pdf_path_or_bytes, password=None):
+    """Extract text from a password-protected or normal PDF."""
+    try:
+        # Handle both file paths and bytes
+        if isinstance(pdf_path_or_bytes, bytes):
+            doc = fitz.open(stream=pdf_path_or_bytes, filetype="pdf")
+        else:
+            doc = fitz.open(pdf_path_or_bytes)
+        
+        # If PDF needs password, authenticate
+        if doc.needs_pass:
+            if not password:
+                doc.close()
+                raise Exception("This PDF requires a password!")
+            if not doc.authenticate(password):
+                doc.close()
+                raise Exception("Incorrect PDF password!")
+        
+        texts = []
+        for page in doc:
+            text = page.get_text("text", sort=True)
+            texts.append(text)
+        
+        doc.close()
+        return "\n".join(texts)
+    except Exception as e:
+        raise Exception(f"Failed to extract PDF text: {str(e)}")
+
+
+def verify_kyc_fields(pdf_text, kyc_info):
+    """Verify KYC fields in PDF text."""
+    results = {}
+    for field, value in kyc_info.items():
+        if not value:
+            results[field] = False
+            continue
+        
+        # Clean and escape the value for regex
+        pattern = re.escape(str(value).strip())
+        match = re.search(pattern, pdf_text, re.IGNORECASE)
+        results[field] = bool(match)
+    
+    return results
+
+
+async def read_upload_file(file: UploadFile) -> bytes:
+    """Read uploaded file and return bytes."""
+    try:
+        contents = await file.read()
+        return contents
+    except Exception as e:
+        raise Exception(f"Failed to read uploaded file: {str(e)}")
 
 
 # =========================================
@@ -585,25 +630,61 @@ def get_wallet_transactions(user: User = Depends(get_current_user), db: Session 
 # ---------- KYC ----------
 @app.get("/kyc/status")
 def kyc_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get KYC verification status"""
     kyc = user.kyc
     if not kyc:
-        return {"status": "pending"}
+        return {
+            "status": "pending",
+            "full_name": None,
+            "account_number": None,
+            "ifsc_code": None,
+            "verification_details": None
+        }
+    
+    # Parse verification details if available
+    verification_details = None
+    if kyc.verification_details:
+        try:
+            verification_details = json.loads(kyc.verification_details)
+        except:
+            pass
+    
     return {
         "status": kyc.status,
-        "pan_number": kyc.pan_number,
-        "aadhaar_number": kyc.aadhaar_number,
-        "address_line": kyc.address_line,
-        "city": kyc.city,
-        "state": kyc.state,
-        "pincode": kyc.pincode,
-        "document_front_url": kyc.document_front_url,
-        "document_back_url": kyc.document_back_url,
-        "reviewed_at": kyc.reviewed_at,
+        "full_name": kyc.full_name,
+        "account_number": kyc.account_number,
+        "ifsc_code": kyc.ifsc_code,
+        "verification_details": verification_details,
+        "updated_at": kyc.updated_at,
     }
 
 
 @app.post("/kyc/submit")
-def kyc_submit(payload: KYCSubmitRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def kyc_submit(
+    full_name: str = Form(...),
+    account_number: str = Form(...),
+    ifsc_code: str = Form(...),
+    bank_statement: UploadFile = File(...),
+    pdf_password: str = Form(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Submit KYC with bank statement PDF upload.
+    The system will automatically verify the bank statement and approve/reject.
+    
+    Form fields:
+    - full_name: Full name as per bank account
+    - account_number: Bank account number
+    - ifsc_code: Bank IFSC code
+    - bank_statement: PDF file upload
+    - pdf_password: Optional password if PDF is protected
+    """
+    
+    # Validate file type
+    if not bank_statement.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
     kyc = user.kyc
 
     if not kyc:
@@ -611,58 +692,68 @@ def kyc_submit(payload: KYCSubmitRequest, user: User = Depends(get_current_user)
         db.add(kyc)
         db.flush()
 
-    # Users can re-submit → status goes back to pending until reviewed
-    kyc.pan_number = payload.pan_number
-    kyc.aadhaar_number = payload.aadhaar_number
-    kyc.address_line = payload.address_line
-    kyc.city = payload.city
-    kyc.state = payload.state
-    kyc.pincode = payload.pincode
-    kyc.document_front_url = payload.document_front_url
-    kyc.document_back_url = payload.document_back_url
+    # Store submitted data
+    kyc.full_name = full_name.strip()
+    kyc.account_number = account_number.strip()
+    kyc.ifsc_code = ifsc_code.strip().upper()
+    kyc.bank_statement_filename = bank_statement.filename
     kyc.status = "pending"
     kyc.updated_at = datetime.utcnow()
-
+    
     db.commit()
-    return {"message": "KYC submitted. Awaiting review."}
+    db.refresh(kyc)
 
-
-# ---------- ADMIN (simple) ----------
-@app.get("/admin/kyc/pending")
-def admin_list_pending_kyc(admin: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    require_admin(admin)
-
-    rows = db.query(KYC).filter(KYC.status == "pending").order_by(KYC.created_at.asc()).all()
-    return [
-        {
-            "kyc_id": r.id,
-            "user_id": r.user_id,
-            "username": db.query(User.username).filter(User.id == r.user_id).scalar(),
-            "pan_number": r.pan_number,
-            "aadhaar_number": r.aadhaar_number,
-            "created_at": r.created_at,
+    # Perform automatic verification
+    try:
+        # Read uploaded PDF file
+        pdf_bytes = await read_upload_file(bank_statement)
+        
+        # Extract text from PDF
+        pdf_text = extract_text_from_pdf(pdf_bytes, pdf_password)
+        
+        # Verify fields
+        kyc_info = {
+            "name": kyc.full_name,
+            "account": kyc.account_number,
+            "ifsc": kyc.ifsc_code
         }
-        for r in rows
-    ]
-
-@app.post("/admin/kyc/{user_id}/decide")
-def admin_decide_kyc(user_id: int, decision: KYCDecisionRequest, admin: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    require_admin(admin)
-
-    kyc = db.query(KYC).filter(KYC.user_id == user_id).first()
-    if not kyc:
-        raise HTTPException(status_code=404, detail="KYC not found for user")
-
-    if decision.approve:
-        kyc.status = "approved"
-    else:
+        
+        verification_results = verify_kyc_fields(pdf_text, kyc_info)
+        
+        # Store verification details
+        kyc.verification_details = json.dumps(verification_results)
+        
+        # Auto-approve if all fields are verified
+        all_verified = all(verification_results.values())
+        
+        if all_verified:
+            kyc.status = "approved"
+            message = "KYC verified and approved automatically!"
+        else:
+            kyc.status = "rejected"
+            failed_fields = [k for k, v in verification_results.items() if not v]
+            message = f"KYC verification failed. Could not verify: {', '.join(failed_fields)}"
+        
+        kyc.updated_at = datetime.utcnow()
+        db.commit()
+        
+        return {
+            "message": message,
+            "status": kyc.status,
+            "verification_results": verification_results
+        }
+        
+    except Exception as e:
+        traceback.print_exc()
         kyc.status = "rejected"
-    kyc.reviewed_by_admin_id = admin.id
-    kyc.reviewed_at = datetime.utcnow()
-    kyc.updated_at = datetime.utcnow()
-
-    db.commit()
-    return {"message": f"KYC {kyc.status} for user {user_id}"}
+        kyc.verification_details = json.dumps({"error": str(e)})
+        kyc.updated_at = datetime.utcnow()
+        db.commit()
+        
+        raise HTTPException(
+            status_code=400,
+            detail=f"KYC verification failed: {str(e)}"
+        )
 
 # =========================================
 # KOTAK NEO BROKER CONNECT
