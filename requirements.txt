@@ -72,7 +72,7 @@ python-dotenv==1.0.0
 python-multipart==0.0.20
 pytz==2025.2
 pyzmq==27.1.0
-requests
+requests==2.25.1
 requests-oauthlib==2.0.0
 rsa==4.9.1
 service-identity==24.2.0
@@ -94,5 +94,5 @@ wcwidth==0.2.14
 websocket-client==1.5.1
 websockets==8.1
 zope.interface==8.1.1
-yfinance == 0.1.70
+yfinance==0.2.50
 zope.interface==8.1.1
