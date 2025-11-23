@@ -1166,8 +1166,7 @@ def zerodha_disconnect(user: User = Depends(get_current_user), db: Session = Dep
     db.commit()
     return {"message": "Disconnected from Zerodha."}
 
-# ===
-======================================
+# =========================================
 # TREEMAP & GLOBAL INDICES ROUTES
 # =========================================
 @app.on_event("startup")
