@@ -19,9 +19,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 # =============================== DB Setup ===============================
-DB_FILE = "nifty_realtime.db"
-DATABASE_URL = f"sqlite:///{DB_FILE}"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Use the same PostgreSQL database as app.py
+DATABASE_URL = "postgresql://postgres:ZpfLDFFOLJemAIEkOTBpEjCuBWYyIwSm@switchback.proxy.rlwy.net:19114/railway"
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -248,10 +248,16 @@ def update_ticker(db, yf_symbol: str):
         exists = db.query(OHLC).filter(OHLC.company_id == company.id, OHLC.date == d).first()
         if exists:
             continue
+        
+        # Convert numpy types to Python native types
         o = OHLC(
             company_id=company.id,
             date=d,
-            open=row["Open"], high=row["High"], low=row["Low"], close=row["Close"], volume=row["Volume"]
+            open=float(row["Open"]),
+            high=float(row["High"]),
+            low=float(row["Low"]),
+            close=float(row["Close"]),
+            volume=float(row["Volume"]) if not math.isnan(row["Volume"]) else None
         )
         db.add(o)
     db.commit()
@@ -281,8 +287,9 @@ def update_index_data(db, index_config: dict):
             print(f"No data for {index_config['symbol']}")
             return
         
-        current_close = hist['Close'].iloc[-1]
-        previous_close = hist['Close'].iloc[0] if len(hist) > 1 else current_close
+        # Convert numpy types to Python native types
+        current_close = float(hist['Close'].iloc[-1])
+        previous_close = float(hist['Close'].iloc[0]) if len(hist) > 1 else current_close
         pct_change = ((current_close - previous_close) / previous_close) * 100 if previous_close != 0 else 0
         market_cap = info.get('marketCap')
         
@@ -309,11 +316,18 @@ def update_index_data(db, index_config: dict):
         ).first()
         
         if not existing_history:
+            # Convert volume to Python int, handling NaN
+            volume_val = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else None
+            if volume_val is not None and not math.isnan(volume_val):
+                volume_val = int(volume_val)
+            else:
+                volume_val = None
+            
             history = IndexHistory(
                 index_id=index.id,
                 date=today,
-                close=current_close,
-                volume=hist['Volume'].iloc[-1] if 'Volume' in hist.columns and not math.isnan(hist['Volume'].iloc[-1]) else None
+                close=float(current_close),
+                volume=volume_val
             )
             db.add(history)
         
@@ -321,6 +335,7 @@ def update_index_data(db, index_config: dict):
         print(f"Updated index: {index_config['name']}")
         
     except Exception as e:
+        db.rollback()  # Rollback on error
         print(f"Error updating index {index_config['symbol']}: {str(e)}")
 
 def update_all_indices():

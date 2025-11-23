@@ -375,6 +375,8 @@ def root():
                 "indices_piechart": "/api/piechart/indices",
                 "indices_details": "/api/indices/details",
                 "global_indices_list": "/api/global/index-list",
+                "global_indices": "/api/global/indices?include_errors=false",
+                "global_treemap_indices": "/api/global/treemap/indices",
                 "global_all_indices_history": "/api/global/indices/history?period=1d|5d|1w|1m|6m|ytd|1y|5y|max",
                 "global_index_current": "/api/global/index/{symbol}/current",
                 "companies": "/api/companies",
@@ -1193,6 +1195,118 @@ def get_indices_detailed():
 def api_index_list():
     """Get list of all global indices organized by continent and country"""
     return treemap_routes.api_index_list()
+
+@app.get("/api/global/indices")
+def list_global_indices(include_errors: bool = False):
+    """
+    Returns all global indices with latest OHLC and 1d % change.
+    include_errors: include indices that have errors (default False)
+    """
+    # Get all indices data with 1 day period to get latest
+    indices_data = treemap_routes.api_all_indices_history(period="1d")
+    
+    result = []
+    for symbol, data in indices_data.items():
+        info = data.get("info", {})
+        ohlc_data = data.get("data", [])
+        error = data.get("error")
+        
+        # Skip errors unless requested
+        if error and not include_errors:
+            continue
+        
+        if ohlc_data and len(ohlc_data) > 0:
+            latest = ohlc_data[-1]
+            previous = ohlc_data[-2] if len(ohlc_data) > 1 else latest
+            
+            close_price = latest.get("close")
+            prev_close = previous.get("close")
+            
+            pct_change = None
+            if close_price and prev_close and prev_close != 0:
+                pct_change = ((close_price - prev_close) / prev_close) * 100
+            
+            result.append({
+                "continent": info.get("continent"),
+                "country": info.get("country"),
+                "index_name": info.get("index_name"),
+                "symbol": symbol,
+                "last_open": latest.get("open"),
+                "last_high": latest.get("high"),
+                "last_low": latest.get("low"),
+                "last_close": close_price,
+                "last_volume": latest.get("volume"),
+                "pct_change_1d": pct_change,
+                "last_error": error
+            })
+        elif error:
+            # Include error entries if requested
+            result.append({
+                "continent": info.get("continent"),
+                "country": info.get("country"),
+                "index_name": info.get("index_name"),
+                "symbol": symbol,
+                "last_open": None,
+                "last_high": None,
+                "last_low": None,
+                "last_close": None,
+                "last_volume": None,
+                "pct_change_1d": None,
+                "last_error": error
+            })
+    
+    # Sort by continent, country, index_name
+    result.sort(key=lambda x: (x["continent"], x["country"], x["index_name"]))
+    return result
+
+@app.get("/api/global/treemap/indices")
+def global_treemap_indices():
+    """Get treemap-friendly data for all global indices"""
+    # Get all indices data
+    indices_data = treemap_routes.api_all_indices_history(period="1d")
+    
+    # Transform to treemap format with weights
+    treemap_data = []
+    total_value = 0
+    
+    # Calculate total for weight calculation (using latest close price)
+    for symbol, data in indices_data.items():
+        if data.get("data") and len(data["data"]) > 0:
+            latest = data["data"][-1]
+            if latest.get("close"):
+                total_value += latest["close"]
+    
+    # Build treemap nodes
+    for symbol, data in indices_data.items():
+        info = data.get("info", {})
+        ohlc_data = data.get("data", [])
+        
+        if ohlc_data and len(ohlc_data) > 0:
+            latest = ohlc_data[-1]
+            previous = ohlc_data[-2] if len(ohlc_data) > 1 else latest
+            
+            close_price = latest.get("close")
+            prev_close = previous.get("close")
+            
+            pct_change = None
+            if close_price and prev_close and prev_close != 0:
+                pct_change = ((close_price - prev_close) / prev_close) * 100
+            
+            weight = (close_price / total_value) if close_price and total_value > 0 else None
+            
+            treemap_data.append({
+                "continent": info.get("continent"),
+                "country": info.get("country"),
+                "index_name": info.get("index_name"),
+                "symbol": symbol,
+                "last_close": close_price,
+                "pct_change_1d": pct_change,
+                "weight": weight
+            })
+    
+    # Sort by weight descending
+    treemap_data.sort(key=lambda x: (x["weight"] is None, -(x["weight"] or 0)))
+    return treemap_data
 
 @app.get("/api/global/indices/history")
 def api_all_indices_history(period: str = "1m"):
