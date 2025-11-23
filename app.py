@@ -22,7 +22,7 @@ from google.auth.transport import requests
 from google_auth_oauthlib.flow import Flow
 
 
-# =========================================#
+# =========================================##
 # CONFIGURATION
 # =========================================
 DATABASE_URL = "postgresql://postgres:ZpfLDFFOLJemAIEkOTBpEjCuBWYyIwSm@switchback.proxy.rlwy.net:19114/railway"
