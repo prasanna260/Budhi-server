@@ -50,6 +50,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Import treemap routes module
+import treemap_routes
+
 # =========================================
 # DATABASE SETUP
 # =========================================
@@ -335,7 +338,50 @@ async def read_upload_file(file: UploadFile) -> bytes:
 # =========================================
 @app.get("/")
 def root():
-    return {"message": "BudhiTrade API is running!"}
+    return {
+        "message": "BudhiTrade API is running!",
+        "endpoints": {
+            "auth": {
+                "signup": "/signup",
+                "login": "/login",
+                "google_auth": "/auth/google",
+                "google_token": "/auth/google/token"
+            },
+            "user": {
+                "profile": "/profile",
+                "wallet": "/wallet",
+                "wallet_add": "/wallet/add",
+                "wallet_withdraw": "/wallet/withdraw",
+                "wallet_transactions": "/wallet/transactions",
+                "kyc_status": "/kyc/status",
+                "kyc_submit": "/kyc/submit"
+            },
+            "brokers": {
+                "kotak_init": "/broker/kotak/init",
+                "kotak_login": "/broker/kotak/login",
+                "kotak_2fa": "/broker/kotak/2fa",
+                "kotak_portfolio": "/broker/kotak/portfolio",
+                "kotak_disconnect": "/broker/kotak/disconnect",
+                "zerodha_init": "/broker/zerodha/init",
+                "zerodha_login_url": "/broker/zerodha/login-url",
+                "zerodha_callback": "/broker/zerodha/callback",
+                "zerodha_complete": "/broker/zerodha/complete",
+                "zerodha_status": "/broker/zerodha/status",
+                "zerodha_portfolio": "/broker/zerodha/portfolio",
+                "zerodha_disconnect": "/broker/zerodha/disconnect"
+            },
+            "market_data": {
+                "nifty_treemap": "/api/treemap/nifty50",
+                "indices_piechart": "/api/piechart/indices",
+                "indices_details": "/api/indices/details",
+                "global_indices_list": "/api/global/index-list",
+                "global_all_indices_history": "/api/global/indices/history?period=1d|5d|1w|1m|6m|ytd|1y|5y|max",
+                "global_index_current": "/api/global/index/{symbol}/current",
+                "companies": "/api/companies",
+                "market_status": "/api/market-status"
+            }
+        }
+    }
 
 @app.post("/signup")
 def signup(request: SignupRequest, db: Session = Depends(get_db)):
@@ -1119,3 +1165,52 @@ def zerodha_disconnect(user: User = Depends(get_current_user), db: Session = Dep
 
     db.commit()
     return {"message": "Disconnected from Zerodha."}
+
+# ===
+======================================
+# TREEMAP & GLOBAL INDICES ROUTES
+# =========================================
+@app.on_event("startup")
+def startup_treemap_scheduler():
+    """Start background scheduler for treemap data updates"""
+    treemap_routes.start_scheduler()
+
+@app.get("/api/treemap/nifty50", response_model=list[treemap_routes.TreemapNode])
+def treemap_nifty50():
+    """Get Nifty50 treemap data"""
+    return treemap_routes.treemap_nifty50()
+
+@app.get("/api/piechart/indices", response_model=list[treemap_routes.IndexPieNode])
+def piechart_indices():
+    """Get major indices data for pie chart visualization"""
+    return treemap_routes.piechart_indices()
+
+@app.get("/api/indices/details")
+def get_indices_detailed():
+    """Get detailed information for all indices"""
+    return treemap_routes.get_indices_detailed()
+
+@app.get("/api/global/index-list", response_model=list[treemap_routes.IndexInfo])
+def api_index_list():
+    """Get list of all global indices organized by continent and country"""
+    return treemap_routes.api_index_list()
+
+@app.get("/api/global/indices/history")
+def api_all_indices_history(period: str = "1m"):
+    """Fetch historical data for all 32 global indices at once"""
+    return treemap_routes.api_all_indices_history(period)
+
+@app.get("/api/global/index/{symbol}/current")
+def get_index_current_price(symbol: str):
+    """Get current price and basic info for a specific index"""
+    return treemap_routes.get_index_current_price(symbol)
+
+@app.get("/api/companies")
+def list_companies():
+    """List all companies in database"""
+    return treemap_routes.list_companies()
+
+@app.get("/api/market-status")
+def get_market_status():
+    """Check current market status"""
+    return treemap_routes.get_market_status()

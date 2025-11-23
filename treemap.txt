@@ -1,0 +1,204 @@
+# Full FastAPI app with: DB models, sample loader, Yahoo Finance updater, 5‑minute scheduler, treemap API
+
+# ---- INSTALL FIRST ----
+# pip install fastapi uvicorn sqlalchemy yfinance apscheduler pydantic pandas
+
+from fastapi import FastAPI, HTTPException
+from datetime import datetime, date, timedelta
+from pydantic import BaseModel, Field
+from typing import Optional, List
+import yfinance as yf
+from apscheduler.schedulers.background import BackgroundScheduler
+import math
+
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, desc
+)
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+
+# =============================== DB Setup ===============================
+DB_FILE = "nifty_realtime.db"
+DATABASE_URL = f"sqlite:///{DB_FILE}"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
+
+# =============================== Models ===============================
+class Company(Base):
+    __tablename__ = "companies"
+
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String, unique=True, index=True)
+    name = Column(String)
+    sector = Column(String)
+    market_cap = Column(Float, nullable=True)
+    is_nifty = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    ohlc = relationship("OHLC", back_populates="company", cascade="all, delete-orphan")
+
+class OHLC(Base):
+    __tablename__ = "ohlc"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"))
+    date = Column(Date, index=True)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float, nullable=True)
+
+    company = relationship("Company", back_populates="ohlc")
+
+Base.metadata.create_all(bind=engine)
+
+# =============================== Pydantic Schemas ===============================
+class TreemapNode(BaseModel):
+    ticker: str
+    name: str
+    sector: Optional[str]
+    market_cap: Optional[float]
+    weight: Optional[float]
+    last_close: Optional[float]
+    pct_change_1d: Optional[float]
+
+# =============================== FastAPI Init ===============================
+app = FastAPI(title="Nifty50 Real‑Time Treemap API")
+
+# =============================== NIFTY50 Ticker List ===============================
+NIFTY50_TICKERS = [
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+    "HINDUNILVR.NS", "ITC.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS",
+    "KOTAKBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS", "ASIANPAINT.NS", "MARUTI.NS",
+    "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "HCLTECH.NS", "WIPRO.NS",
+    "POWERGRID.NS", "TATAMOTORS.NS", "ADANIENT.NS", "ADANIPORTS.NS", "NTPC.NS",
+    "TECHM.NS", "ONGC.NS", "NESTLEIND.NS", "JSWSTEEL.NS", "COALINDIA.NS",
+    "BAJAJ-AUTO.NS", "GRASIM.NS", "HDFCLIFE.NS", "DRREDDY.NS", "DIVISLAB.NS",
+    "BRITANNIA.NS", "SHREECEM.NS", "CIPLA.NS", "EICHERMOT.NS", "HEROMOTOCO.NS",
+    "HINDALCO.NS", "INDUSINDBK.NS", "TATACONSUM.NS", "TATAPOWER.NS", "M&M.NS",
+    "APOLLOHOSP.NS", "BAJAJFINSV.NS", "BPCL.NS", "SBILIFE.NS", "UPL.NS"
+]
+
+# =============================== Helper ===============================
+from contextlib import contextmanager
+@contextmanager
+def db_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# =============================== Yahoo Finance Updater ===============================
+def update_ticker(db, yf_symbol: str):
+    yf_tk = yf.Ticker(yf_symbol)
+    info = yf_tk.info
+
+    base_ticker = yf_symbol.replace(".NS", "")
+    company = db.query(Company).filter(Company.ticker == base_ticker).first()
+
+    if not company:
+        # create entry if missing
+        company = Company(
+            ticker=base_ticker,
+            name=info.get("longName", base_ticker),
+            sector=info.get("sector", "Unknown"),
+            is_nifty=True
+        )
+        db.add(company)
+        db.commit(); db.refresh(company)
+
+    # Update market cap
+    mc = info.get("marketCap")
+    if mc:
+        company.market_cap = float(mc)
+
+    # Fetch 5 days OHLC
+    hist = yf_tk.history(period="5d")
+    for idx, row in hist.iterrows():
+        d = idx.date()
+        exists = db.query(OHLC).filter(OHLC.company_id == company.id, OHLC.date == d).first()
+        if exists:
+            continue
+        o = OHLC(
+            company_id=company.id,
+            date=d,
+            open=row["Open"], high=row["High"], low=row["Low"], close=row["Close"], volume=row["Volume"]
+        )
+        db.add(o)
+    db.commit()
+
+
+def update_all_tickers():
+    with db_session() as db:
+        print(f"[Updater] Running at {datetime.now()}")
+        for sym in NIFTY50_TICKERS:
+            try:
+                update_ticker(db, sym)
+                print("Updated", sym)
+            except Exception as e:
+                print("Error updating", sym, e)
+        print("==== Update complete ====")
+
+# =============================== Scheduler ===============================
+scheduler = BackgroundScheduler()
+
+@app.on_event("startup")
+def start_background_jobs():
+    scheduler.add_job(update_all_tickers, "interval", minutes=5)
+    scheduler.start()
+    print("Scheduler started. Updating every 5 minutes.")
+
+# Run once at startup for initial data
+    update_all_tickers()
+
+# =============================== Treemap API ===============================
+@app.get("/api/treemap/nifty50", response_model=List[TreemapNode])
+def treemap_nifty50():
+    with db_session() as db:
+        companies = db.query(Company).filter(Company.is_nifty == True).all()
+        if not companies:
+            return []
+
+        total_market_cap = sum([
+            c.market_cap for c in companies if c.market_cap is not None
+        ])
+
+        nodes = []
+        for c in companies:
+            # fetch latest 2 OHLC rows
+            ohlc = db.query(OHLC).filter(OHLC.company_id == c.id).order_by(OHLC.date.desc()).limit(2).all()
+
+            last_close = ohlc[0].close if len(ohlc) > 0 else None
+            pct_change = None
+            if len(ohlc) == 2 and ohlc[1].close > 0:
+                pct_change = ((ohlc[0].close - ohlc[1].close) / ohlc[1].close) * 100
+
+            node = TreemapNode(
+                ticker=c.ticker,
+                name=c.name,
+                sector=c.sector,
+                market_cap=c.market_cap,
+                weight=(c.market_cap / total_market_cap) if c.market_cap else None,
+                last_close=last_close,
+                pct_change_1d=pct_change
+            )
+            nodes.append(node)
+
+        # sort largest first
+        return sorted(nodes, key=lambda x: (x.market_cap or 0), reverse=True)
+
+# =============================== Debug Routes ===============================
+@app.get("/api/companies")
+def list_companies():
+    with db_session() as db:
+        return [
+            {
+                "ticker": c.ticker,
+                "name": c.name,
+                "sector": c.sector,
+                "market_cap": c.market_cap
+            }
+            for c in db.query(Company).all()
+        ]
