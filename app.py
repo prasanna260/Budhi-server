@@ -1201,15 +1201,23 @@ def list_global_indices(include_errors: bool = False):
     """
     Returns all global indices with latest OHLC and 1d % change.
     include_errors: include indices that have errors (default False)
+    
+    By default, only returns indices with valid data (no errors).
     """
     # Get all indices data with 1 day period to get latest
     indices_data = treemap_routes.api_all_indices_history(period="1d")
     
     result = []
+    error_count = 0
+    
     for symbol, data in indices_data.items():
         info = data.get("info", {})
         ohlc_data = data.get("data", [])
         error = data.get("error")
+        
+        # Count errors for logging
+        if error:
+            error_count += 1
         
         # Skip errors unless requested
         if error and not include_errors:
@@ -1236,11 +1244,10 @@ def list_global_indices(include_errors: bool = False):
                 "last_low": latest.get("low"),
                 "last_close": close_price,
                 "last_volume": latest.get("volume"),
-                "pct_change_1d": pct_change,
-                "last_error": error
+                "pct_change_1d": pct_change
             })
-        elif error:
-            # Include error entries if requested
+        elif error and include_errors:
+            # Include error entries only if requested
             result.append({
                 "continent": info.get("continent"),
                 "country": info.get("country"),
@@ -1252,16 +1259,23 @@ def list_global_indices(include_errors: bool = False):
                 "last_close": None,
                 "last_volume": None,
                 "pct_change_1d": None,
-                "last_error": error
+                "error": error
             })
     
     # Sort by continent, country, index_name
     result.sort(key=lambda x: (x["continent"], x["country"], x["index_name"]))
+    
+    # Log summary
+    print(f"Returning {len(result)} indices ({error_count} had errors, {'included' if include_errors else 'excluded'})")
+    
     return result
 
 @app.get("/api/global/treemap/indices")
 def global_treemap_indices():
-    """Get treemap-friendly data for all global indices"""
+    """
+    Get treemap-friendly data for all global indices.
+    Only returns indices with valid data (skips errors).
+    """
     # Get all indices data
     indices_data = treemap_routes.api_all_indices_history(period="1d")
     
@@ -1270,14 +1284,21 @@ def global_treemap_indices():
     total_value = 0
     
     # Calculate total for weight calculation (using latest close price)
+    # Skip indices with errors
     for symbol, data in indices_data.items():
+        if data.get("error"):
+            continue
         if data.get("data") and len(data["data"]) > 0:
             latest = data["data"][-1]
             if latest.get("close"):
                 total_value += latest["close"]
     
-    # Build treemap nodes
+    # Build treemap nodes (skip indices with errors)
     for symbol, data in indices_data.items():
+        # Skip indices with errors
+        if data.get("error"):
+            continue
+            
         info = data.get("info", {})
         ohlc_data = data.get("data", [])
         
@@ -1287,6 +1308,10 @@ def global_treemap_indices():
             
             close_price = latest.get("close")
             prev_close = previous.get("close")
+            
+            # Skip if no valid close price
+            if not close_price:
+                continue
             
             pct_change = None
             if close_price and prev_close and prev_close != 0:
@@ -1306,6 +1331,8 @@ def global_treemap_indices():
     
     # Sort by weight descending
     treemap_data.sort(key=lambda x: (x["weight"] is None, -(x["weight"] or 0)))
+    
+    print(f"Returning {len(treemap_data)} indices for treemap (skipped errors)")
     return treemap_data
 
 @app.get("/api/global/indices/history")
